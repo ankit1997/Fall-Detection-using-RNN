@@ -36,3 +36,7 @@ class DataLoader:
         np.random.shuffle(indices)
         self.x = x[indices]
         self.y = y[indices]
+
+class DataReader:
+    def __init__(self, path):
+        pass
