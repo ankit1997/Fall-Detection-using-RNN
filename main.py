@@ -1,6 +1,13 @@
+'''
+@author: Ankit Bindal
+'''
+
 import os
+import pickle
 import tensorflow as tf
-from dataLoader import DataLoader
+from helper import Data, DataLoader
+
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
 class FallDetector:
     def __init__(self, batch_size, num_features, timesteps, num_classes):
@@ -14,9 +21,13 @@ class FallDetector:
         os.makedirs(model_dir, exist_ok=True)
         self.model_file = os.path.join(model_dir, "model.ckpt")
 
+        print("Building the model...")
         self.build_model()
         self.define_loss()
         self.define_optimizer()
+
+        self.saver = tf.train.Saver()
+        self.tensorboard_op = tf.summary.merge_all()
 
     def build_model(self):
         '''
@@ -50,51 +61,16 @@ class FallDetector:
         dense2_out = self._dense_layer(dense1_out, self.num_classes, 'final', activation=tf.nn.softmax)
 
         self.prediction = dense2_out
-        print(dense2_out.shape)
 
     def define_loss(self):
-        self.loss = tf.losses.softmax_cross_entropy(onehot_labels=self.y, logits=self.prediction)
+        self.loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits_v2(labels=self.y, logits=self.prediction))
+        tf.summary.scalar("Cross-entropy-loss", self.loss) # for tensorboard
 
     def define_optimizer(self):
-        optimizer = tf.train.AdamOptimizer()
+        optimizer = tf.train.AdamOptimizer(0.0001)
         update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
         with tf.control_dependencies(update_ops):
             self.train_step = optimizer.minimize(self.loss)
-
-    def train(self, path, epochs=50, log_step=10, resume=False):
-        '''
-            Trains the fall detection model on provided data.
-            Args:
-                path : Path to dataset directory
-        '''
-
-        x, y = self._read_data(path)
-        data = Data(x, y)
-
-        with tf.Session() as session:
-            if resume:
-                if os.path.isfile(self.model_file):
-                    self.saver.restore(session, self.model_file)
-                else:
-                    print("No previous checkpoint file found, restarting training...")
-
-            session.run(tf.global_variables_initializer())
-
-            for e in range(epochs):
-                avg_loss = 0.0
-                for batch_x, batch_y in data.next_batch():
-                    batch_loss, _ = session.run([self.loss, self.train_step], 
-                                    feed_dict={self.x: x, self.y: y, self.is_training: True})
-                    avg_loss += batch_loss
-
-                if e%log_step == 0:
-                    print("Average loss for epoch {} = {}.".format(e, avg_loss))
-                    
-                    # Save the model state
-                    fname = self.saver.save(session, self.model_file)
-                    print("Session saved in {}".format(fname))
-
-        print("Training complete!")
 
     def _lstm_layer(self, inputs, num_units, scope, cell_type='LSTM'):
         '''
@@ -139,19 +115,71 @@ class FallDetector:
 
         return out
 
-    def _read_data(self, path):
+    def train(self, path, epochs=50, log_step=10, resume=False):
         '''
-            Reads dataset from directory.
+            Trains the fall detection model on provided data.
             Args:
-                path : Path to dataset directory.
-            Returns:
-                (x, y) tuple where:
-                    x : Numpy array of shape (Batch, timesteps, features)
-                    y : Numpy array of shape (Batch, num_classes)
+                path : Path to dataset directory
         '''
-        assert os.path.isdir(path), "{} is not a valid directory.".format(path)
 
-        raise NotImplementedError
+        print("Beginning the training process...")
+
+        if os.path.isfile('loaded_dataset.pkl'):
+            data = pickle.load(open('loaded_dataset.pkl', 'rb'))
+        else:
+            data = DataLoader(path)
+            pickle.dump(data, open('loaded_dataset.pkl', 'wb'))
+
+        with tf.Session() as session:
+            writer = tf.summary.FileWriter("for_tensorboard", session.graph)
+
+            resumed = False
+            if resume:
+                try:
+                    self.saver.restore(session, self.model_file)
+                    resumed = True
+                except:
+                    print("No previous checkpoint file found, restarting training...")
+
+            if not resumed:
+                session.run(tf.global_variables_initializer())
+            '''
+            for e in range(epochs):
+                avg_loss = []
+                for batch_x, batch_y in data.next_batch(self.batch_size, training=True):
+                    batch_loss, _, tb_op = session.run([self.loss, self.train_step, self.tensorboard_op], 
+                                    feed_dict={self.x: batch_x, self.y: batch_y, self.is_training: True})
+                    avg_loss.append(batch_loss)
+
+                print("Average Loss for epoch {} = {}.".format(e, sum(avg_loss)/len(avg_loss)))
+                
+                if e%log_step == 0:
+                    # Save the model state
+                    fname = self.saver.save(session, self.model_file)
+                    print("Session saved in {}".format(fname))
+                
+                writer.add_summary(tb_op, e)
+            '''
+            writer.close()
+
+        print("Training complete!")
+
+        print(self.evaluate(data))
+
+    def evaluate(self, data):
+        with tf.Session() as session:
+            self.saver.restore(session, self.model_file)
+
+            avg_loss = []
+            for batch_x, batch_y in data.next_batch(batch_size=16, training=False):
+                pred, loss_ = session.run([self.prediction, self.loss], feed_dict={self.x: batch_x, self.y: batch_y, self.is_training: False})
+                avg_loss.append(loss_)
+
+            print("Average loss on evaluation set: {}".format(sum(avg_loss) / len(avg_loss)))
+
+        return pred
 
 if __name__ == '__main__':
-    fallDetector = FallDetector(32, 9, 100, 13)
+    # params : batch_size, num_features, timesteps, num_classes
+    fallDetector = FallDetector(16, 9, 450, 2)
+    fallDetector.train("MobiFall_Dataset_v2.0", resume=True)
