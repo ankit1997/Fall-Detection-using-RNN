@@ -217,7 +217,7 @@ class DataLoader:
         num_points = features.shape[0]
         n_batches = int(np.ceil(num_points/batch_size))
 
-        for b in range(n_batches):
+        for b in tqdm(range(n_batches)):
             start = b*batch_size
             end = start+batch_size
             if end >= num_points:
