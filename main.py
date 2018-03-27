@@ -6,8 +6,10 @@ import os
 import pickle
 import tensorflow as tf
 from helper import Data, DataLoader
-
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+
+TB_DIR = "for_tensorboard"
+model_dir = "saved_model"
 
 class FallDetector:
     def __init__(self, batch_size, num_features, timesteps, num_classes):
@@ -17,7 +19,6 @@ class FallDetector:
         self.num_classes = num_classes
 
         # Model checkpoint file
-        model_dir="saved_model"
         os.makedirs(model_dir, exist_ok=True)
         self.model_file = os.path.join(model_dir, "model.ckpt")
 
@@ -28,6 +29,7 @@ class FallDetector:
 
         self.saver = tf.train.Saver()
         self.tensorboard_op = tf.summary.merge_all()
+        print("Model built!")
 
     def build_model(self):
         '''
@@ -61,6 +63,12 @@ class FallDetector:
         dense2_out = self._dense_layer(dense1_out, self.num_classes, 'final', activation=tf.nn.softmax)
 
         self.prediction = dense2_out
+
+        # For accuracy
+        pred_classes = tf.argmax(self.prediction, axis=-1)
+        actual_classes = tf.argmax(self.y, axis=-1)
+        correct = tf.equal(pred_classes, actual_classes)
+        self.accuracy = tf.reduce_mean(tf.cast(correct, tf.float32), name='accuracy')
 
     def define_loss(self):
         self.loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits_v2(labels=self.y, logits=self.prediction))
@@ -130,8 +138,15 @@ class FallDetector:
             data = DataLoader(path)
             pickle.dump(data, open('loaded_dataset.pkl', 'wb'))
 
+        # load min validation loss
+        valid_file = os.path.join(model_dir, "min_valid_loss.txt")
+        if os.path.isfile(valid_file):
+            min_valid_loss = float(open(valid_file).read().strip())
+        else:
+            min_valid_loss = 1000000.0
+
         with tf.Session() as session:
-            writer = tf.summary.FileWriter("for_tensorboard", session.graph)
+            writer = tf.summary.FileWriter(TB_DIR, session.graph)
 
             resumed = False
             if resume:
@@ -143,7 +158,7 @@ class FallDetector:
 
             if not resumed:
                 session.run(tf.global_variables_initializer())
-            '''
+            
             for e in range(epochs):
                 avg_loss = []
                 for batch_x, batch_y in data.next_batch(self.batch_size, training=True):
@@ -154,12 +169,28 @@ class FallDetector:
                 print("Average Loss for epoch {} = {}.".format(e, sum(avg_loss)/len(avg_loss)))
                 
                 if e%log_step == 0:
-                    # Save the model state
-                    fname = self.saver.save(session, self.model_file)
-                    print("Session saved in {}".format(fname))
+                    # Run for validation set
+                    avg_loss = []
+                    avg_accuracy = []
+                    for batch_x, batch_y in data.next_batch(self.batch_size, training=False, validation=True):
+                        batch_loss, batch_acc = session.run([self.loss, self.accuracy], 
+                                        feed_dict={self.x: batch_x, self.y: batch_y, self.is_training: False})
+                        avg_loss.append(batch_loss)
+                        avg_accuracy.append(batch_acc)
+
+                    avg_accuracy = sum(avg_accuracy) / len(avg_accuracy)
+                    avg_loss = sum(avg_loss) / len(avg_loss)
+
+                    if avg_loss < min_valid_loss:
+                        min_valid_loss = avg_loss
+                        with open(valid_file, 'w') as f:
+                            f.write(str(avg_loss))
+                        self.save_session(session)
+
+                    print("Validation Error: {}. Validation Accuracy: {}".format(avg_loss, avg_accuracy))
                 
                 writer.add_summary(tb_op, e)
-            '''
+            
             writer.close()
 
         print("Training complete!")
@@ -171,15 +202,24 @@ class FallDetector:
             self.saver.restore(session, self.model_file)
 
             avg_loss = []
+            avg_accuracy = []
             for batch_x, batch_y in data.next_batch(batch_size=16, training=False):
-                pred, loss_ = session.run([self.prediction, self.loss], feed_dict={self.x: batch_x, self.y: batch_y, self.is_training: False})
+                pred, loss_, acc_ = session.run([self.prediction, self.loss, self.accuracy], feed_dict={self.x: batch_x, self.y: batch_y, self.is_training: False})
                 avg_loss.append(loss_)
+                avg_accuracy.append(acc_)
 
-            print("Average loss on evaluation set: {}".format(sum(avg_loss) / len(avg_loss)))
+            avg_loss = sum(avg_loss) / len(avg_loss)
+            avg_accuracy = sum(avg_accuracy) / len(avg_accuracy)
+            print("Average loss on evaluation set: {}".format(avg_loss))
+            print("Average accuracy of evaluation set: {}".format(avg_accuracy))
 
-        return pred
+        return avg_loss, avg_accuracy
+
+    def save_session(self, sess):
+        fname = self.saver.save(sess, self.model_file)
+        print("Session saved in {}".format(fname))
 
 if __name__ == '__main__':
     # params : batch_size, num_features, timesteps, num_classes
     fallDetector = FallDetector(16, 9, 450, 2)
-    fallDetector.train("MobiFall_Dataset_v2.0", resume=True)
+    fallDetector.train("MobiFall_Dataset_v2.0", epochs=100)

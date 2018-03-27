@@ -21,7 +21,7 @@ class Data:
         self.shuffle()
     
     def shuffle(self):
-        np.random.seed(7)
+        np.random.seed(13)
         indices = np.array(range(self.labels.shape[0]))
         np.random.shuffle(indices)
         self.features = self.features[indices]
@@ -202,17 +202,23 @@ class DataLoader:
         labels = np.array(labels)
         self.dataset = Data(readings, labels)
 
-    def next_batch(self, batch_size=16, training=True):
+    def next_batch(self, batch_size=16, training=True, validation=False):
         features = self.dataset.features
         labels = self.dataset.labels
 
         train_size = int(features.shape[0] * 0.8)
+        valid_size = int(features.shape[0] * 0.9)
         if training:
             features = features[:train_size]
             labels = labels[:train_size]
+
+        elif validation:
+            features = features[train_size:valid_size]
+            labels = labels[train_size:valid_size]
+
         else:
-            features = features[train_size:]
-            labels = labels[train_size:]
+            features = features[valid_size:]
+            labels = labels[valid_size:]
 
         num_points = features.shape[0]
         n_batches = int(np.ceil(num_points/batch_size))
