@@ -8,8 +8,8 @@ import tensorflow as tf
 from helper import Data, DataLoader
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
-TB_DIR = "for_tensorboard"
-model_dir = "saved_model"
+TB_DIR = "for_tensorboard-3dense"
+model_dir = "saved_model-3dense"
 
 class FallDetector:
     def __init__(self, batch_size, num_features, timesteps, num_classes):
@@ -42,13 +42,9 @@ class FallDetector:
         # define placeholders
         self.x = tf.placeholder(tf.float32, shape=(self.batch_size, self.timesteps, self.num_features), name='x')
         self.y = tf.placeholder(tf.float32, shape=(self.batch_size, self.num_classes), name='y')
-        self.is_training = tf.placeholder(tf.bool, name='is_training')
-
-        # normalize input
-        normalized_input = tf.layers.batch_normalization(self.x, axis=2, training=self.is_training)
         
         # convert input tensor to list of tensors, for input in static_rnn() function.      
-        inputs = tf.split(normalized_input, self.timesteps, axis=1) # convert (batch_size, timesteps, num_features) to list of (batch_size, 1, num_features)
+        inputs = tf.split(self.x, self.timesteps, axis=1) # convert (batch_size, timesteps, num_features) to list of (batch_size, 1, num_features)
         inputs = [tf.squeeze(inp) for inp in inputs] # convert (batch_size, 1, num_features) to (batch_size, num_features)
 
         # RNN layers
@@ -60,15 +56,16 @@ class FallDetector:
 
         # Dense layers
         dense1_out = self._dense_layer(final_node, 32, 'dense-1', activation=tf.nn.elu)
-        dense2_out = self._dense_layer(dense1_out, self.num_classes, 'final', activation=tf.nn.softmax)
-
-        self.prediction = dense2_out
+        dense2_out = self._dense_layer(dense1_out, 8, 'dense-2', activation=tf.nn.elu)
+        self.prediction = self._dense_layer(dense2_out, self.num_classes, 'Prediction', activation=tf.nn.softmax)
 
         # For accuracy
-        pred_classes = tf.argmax(self.prediction, axis=-1)
-        actual_classes = tf.argmax(self.y, axis=-1)
-        correct = tf.equal(pred_classes, actual_classes)
-        self.accuracy = tf.reduce_mean(tf.cast(correct, tf.float32), name='accuracy')
+        with tf.variable_scope('accuracy'):
+            pred_classes = tf.argmax(self.prediction, axis=-1)
+            actual_classes = tf.argmax(self.y, axis=-1)
+            correct = tf.equal(pred_classes, actual_classes)
+            self.accuracy = tf.reduce_mean(tf.cast(correct, tf.float32), name='mean_accuracy')
+            tf.summary.scalar("Accuracy", self.accuracy) # for tensorboard
 
     def define_loss(self):
         self.loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits_v2(labels=self.y, logits=self.prediction))
@@ -163,7 +160,7 @@ class FallDetector:
                 avg_loss = []
                 for batch_x, batch_y in data.next_batch(self.batch_size, training=True):
                     batch_loss, _, tb_op = session.run([self.loss, self.train_step, self.tensorboard_op], 
-                                    feed_dict={self.x: batch_x, self.y: batch_y, self.is_training: True})
+                                    feed_dict={self.x: batch_x, self.y: batch_y})
                     avg_loss.append(batch_loss)
 
                 print("Average Loss for epoch {} = {}.".format(e, sum(avg_loss)/len(avg_loss)))
@@ -174,7 +171,7 @@ class FallDetector:
                     avg_accuracy = []
                     for batch_x, batch_y in data.next_batch(self.batch_size, training=False, validation=True):
                         batch_loss, batch_acc = session.run([self.loss, self.accuracy], 
-                                        feed_dict={self.x: batch_x, self.y: batch_y, self.is_training: False})
+                                        feed_dict={self.x: batch_x, self.y: batch_y})
                         avg_loss.append(batch_loss)
                         avg_accuracy.append(batch_acc)
 
@@ -204,7 +201,7 @@ class FallDetector:
             avg_loss = []
             avg_accuracy = []
             for batch_x, batch_y in data.next_batch(batch_size=16, training=False):
-                pred, loss_, acc_ = session.run([self.prediction, self.loss, self.accuracy], feed_dict={self.x: batch_x, self.y: batch_y, self.is_training: False})
+                pred, loss_, acc_ = session.run([self.prediction, self.loss, self.accuracy], feed_dict={self.x: batch_x, self.y: batch_y})
                 avg_loss.append(loss_)
                 avg_accuracy.append(acc_)
 
@@ -220,6 +217,10 @@ class FallDetector:
         print("Session saved in {}".format(fname))
 
 if __name__ == '__main__':
+    path = "MobiFall_Dataset_v2.0"
     # params : batch_size, num_features, timesteps, num_classes
     fallDetector = FallDetector(16, 9, 450, 2)
-    fallDetector.train("MobiFall_Dataset_v2.0", epochs=100)
+    fallDetector.train(path, epochs=100)
+
+    # data = DataLoader(path)
+    # fallDetector.evaluate(data)
