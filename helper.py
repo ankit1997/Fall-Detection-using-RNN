@@ -21,7 +21,8 @@ class Data:
         self.shuffle()
     
     def shuffle(self):
-        np.random.seed(13)
+        # np.random.seed(13)
+        np.random.seed(17)
         indices = np.array(range(self.labels.shape[0]))
         np.random.shuffle(indices)
         self.features = self.features[indices]
@@ -206,8 +207,8 @@ class DataLoader:
         features = self.dataset.features
         labels = self.dataset.labels
 
-        train_size = int(features.shape[0] * 0.8)
-        valid_size = int(features.shape[0] * 0.9)
+        train_size = int(features.shape[0] * 0.70)
+        valid_size = int(features.shape[0] * 0.85)
         if training:
             features = features[:train_size]
             labels = labels[:train_size]
